@@ -1,0 +1,7 @@
+mono_calibration_frames: 10
+stereo_calibration_frames: 10
+view_resize: 1
+checkerboard_box_size_scale : 1
+checkerboard_rows: 6
+checkerboard_columns: 6
+cooldown: 30
