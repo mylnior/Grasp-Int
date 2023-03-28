@@ -16,8 +16,8 @@ if __name__ == '__main__':
     mesh = trimesh.primitives.Sphere()
 
     # create some rays
-    ray_origins = np.array([[0, 0, -5],
-                            [2, 2, -10]])
+    ray_origins = np.array([[100, 0, -5],
+                            [102, 2, -10]])
     ray_directions = np.array([[0, 0, 1],
                                [0, 0, 1]])
 
@@ -43,6 +43,11 @@ if __name__ == '__main__':
     """
 
     # run the mesh- ray test
+    tr = trimesh.transformations.euler_matrix(0,0,np.pi)[:3,:3]
+    vec = np.array([0,1,0])
+    print(tr)
+    print(tr@vec)
+    exit()
     locations, index_ray, index_tri = mesh.ray.intersects_location(
         ray_origins=ray_origins,
         ray_directions=ray_directions)

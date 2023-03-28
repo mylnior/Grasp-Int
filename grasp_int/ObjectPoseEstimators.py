@@ -81,7 +81,8 @@ class KnownObjectPoseEstimator:
                 self.pose_estimation_prior = None
                 print('NEW DETECTION')
             else:
-                print('TRACKING')
+                # print('TRACKING')
+                pass
 
             if self.pose_estimation_prior is None or self.fuse_detections:
                 n_coarse_iterations=1

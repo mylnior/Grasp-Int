@@ -10,6 +10,7 @@ import numpy as np
 import trimesh as tm
 import trimesh.scene.cameras as cam
 import trimesh.viewer as vw
+import pyfqmr
 from scipy.spatial.transform import Rotation as R
 
 from grasp_int.depthai_hand_tracker.HandTrackerRenderer import \
@@ -47,8 +48,12 @@ class Scene :
         self.name = name
         self.draw_mesh = True
         self.new_hand_meshes = []
+        self.new_object_meshes = []
+        self.objects_collider = tm.collision.CollisionManager()
         if self.draw_mesh:
             self.define_mesh_scene()
+        self.velocity_cone_mode = 'rays'
+        # self.velocity_cone_mode = 'cone'
 
     def __str__(self) -> str:
         s = 'SCENE \n OBJECTS :\n'
@@ -57,42 +62,131 @@ class Scene :
         return s
     
     def display_meshes(self):
-        self.mesh_scene.show(callback=self.update_meshes,callback_period=1.0/15.0)
+        self.mesh_scene.show(callback=self.update_meshes,callback_period=1.0/15.0,line_settings={'point_size':10})
 
     def update_hands_meshes(self, scene):
         for i in range(len(self.new_hand_meshes)):
             new = self.new_hand_meshes.pop(0)
-            self.mesh_scene.add_geometry(new['mesh'], geom_name = new['name'])
+            scene.add_geometry(new['mesh'], geom_name = new['name'])
         
         for label, hand in self.hands.items():
-            hand_mesh_pos = tm.transformations.compose_matrix(translate = hand.mesh_position.v)
-            scene.graph.update(label,matrix = hand_mesh_pos , geometry = label)
-            vdir = hand.normed_velocity
-            zaxis = np.array([0,0,1])
-            vel_rot_mat = rotation_from_vectors(zaxis,vdir)
-            cone_len = self.cone_lenghts_spline(hand.scalar_velocity)
-            cone_diam = self.cone_diam_spline(hand.scalar_velocity)
-            x_reflection_matrix = tm.transformations.reflection_matrix(np.array([0,0,0]), np.array([1,0,0]))
-            z_reflection_matrix = tm.transformations.reflection_matrix(np.array([0,0,cone_len/2]), np.array([0,0,1]))
-            tot_mat = hand_mesh_pos @ x_reflection_matrix @ vel_rot_mat @ z_reflection_matrix
-            hand.velocity_cone = tm.creation.cone(cone_diam, cone_len)
-            scene.delete_geometry(label+'vel_cone')
-            
-            scene.add_geometry(hand.velocity_cone, geom_name = label+'vel_cone', transform = tot_mat)
+            hand.mesh_pos = tm.transformations.compose_matrix(translate = hand.mesh_position.v)
+            scene.graph.update(label,matrix = hand.mesh_pos , geometry = label)
+            if self.velocity_cone_mode == 'cone':
+                vdir = hand.normed_velocity
+                vdir = np.array([0,0.0001,-1])
+                zaxis = np.array([0,0,1])
+                vel_rot_mat = rotation_from_vectors(zaxis,vdir)
+                cone_len = self.cone_lenghts_spline(hand.scalar_velocity)
+                cone_len = 2000
+                cone_diam = self.cone_diam_spline(hand.scalar_velocity)
+                x_reflection_matrix = tm.transformations.reflection_matrix(np.array([0,0,0]), np.array([1,0,0]))
+                z_reflection_matrix = tm.transformations.reflection_matrix(np.array([0,0,cone_len/2]), np.array([0,0,1]))
+                tot_mat = hand.mesh_pos @ x_reflection_matrix @ vel_rot_mat @ z_reflection_matrix
+                # tot_mat = hand.mesh_pos 
+                hand.velocity_cone = tm.creation.cone(cone_diam, cone_len)
+                scene.delete_geometry(label+'vel_cone')
+                scene.add_geometry(hand.velocity_cone, geom_name = label+'vel_cone', transform = tot_mat)
+                self.check_collisions(hand.velocity_cone, tot_mat)
+            else:
+                self.check_rays(scene,hand)
 
     def update_object_meshes(self, scene):
-        for label, obj in self.objects.items():
-            mesh_pos = obj.pose.position.v*1000*np.array([-1,1,1])
-            mesh_orient_quat = obj.pose.raw_orientation.q
-            mesh_orient_angles = obj.pose.raw_orientation.v*np.array([-1,-1,-1])+np.pi*np.array([1  ,1,0])
-            x_reflection_matrix = tm.transformations.reflection_matrix(np.array([0,0,0]), np.array([1,0,0]))
-            mesh_transform = tm.transformations.translation_matrix(mesh_pos)  @ tm.transformations.quaternion_matrix(mesh_orient_quat)
-            mesh_transform = tm.transformations.translation_matrix(mesh_pos) @ tm.transformations.euler_matrix(mesh_orient_angles[0],mesh_orient_angles[1],mesh_orient_angles[2])
-            scene.graph.update(label,matrix = mesh_transform)
-            # for hand in self.hands.values():
-            #     intersect = tm.boolean.intersection(obj.mesh,hand.velocity_cone)
-            #     print(type(intersect))
+        for i in range(len(self.new_object_meshes)):
+            new = self.new_object_meshes.pop(0)
+            scene.add_geometry(new['mesh'], geom_name = new['name'])
+            # self.objects_collider.add_object(new['name'], new['mesh'])            
+            print('add here')
+            print(scene.geometry)
+            print('add there')
 
+        for label, obj in self.objects.items():
+            obj.mesh_pos = obj.pose.position.v*np.array([-1,1,1])
+            mesh_orient_quat = [obj.pose.orientation.q[i] for i in range(4)]
+            mesh_orient_angles = obj.pose.orientation.v*np.array([-1,-1,-1])+np.pi*np.array([1  ,1,0])
+            mesh_orient_angles = obj.pose.orientation.v*np.array([1,1,1])+np.pi*np.array([0 ,0,1])
+            x_reflection_matrix = tm.transformations.reflection_matrix(np.array([0,0,0]), np.array([1,0,0]))
+            #mesh_transform = tm.transformations.translation_matrix(mesh_pos)  @ tm.transformations.quaternion_matrix(mesh_orient_quat)
+            rot_mat = tm.transformations.euler_matrix(mesh_orient_angles[0],mesh_orient_angles[1],mesh_orient_angles[2])
+            mesh_transform = tm.transformations.translation_matrix(obj.mesh_pos) @ rot_mat
+            # scene.geometry[label].apply_transform(mesh_transform)
+            # self.objects_collider.set_transform(label,mesh_transform)           
+            scene.graph.update(label, matrix=mesh_transform)
+            obj.mesh_transform = mesh_transform
+            # self.check_intersect(obj)
+
+    def check_collisions(self,cone, tf):
+        collision, name, data = self.objects_collider.in_collision_single(cone, transform=tf, return_data=True, return_names=True)
+        if collision:
+            print(str(name)+' : ')
+            for dat in data:
+                print('normal : '+str(dat.normal))
+                print('point : '+str(dat.point))
+                print('depth : '+str(dat.depth))
+
+    def check_intersect(self, hand):
+        for hand in self.hands.values():
+            l = [obj.mesh,self.test_cone]
+            print(l)
+            intersect = tm.boolean.intersection(l, engine='blender')
+            print(type(intersect))
+
+    def check_rays(self,scene,hand):
+        for label, obj in self.objects.items():
+            vdir = hand.normed_velocity
+            cone_len = self.cone_lenghts_spline(hand.scalar_velocity)
+            cone_diam = self.cone_diam_spline(hand.scalar_velocity)
+            n_layers = 5
+            # vecteur aléatoire
+            random_vector = np.random.rand(len(vdir))
+
+            # projection
+            projection = np.dot(random_vector, vdir)
+
+            # vecteur orthogonal
+            orthogonal_vector = random_vector - projection * vdir
+
+            # vecteur unitaire orthogonal
+            orthogonal_unit_vector = orthogonal_vector / np.linalg.norm(orthogonal_vector)
+
+            #ray_directions = np.vstack([ vdir*cone_len + (-cone_diam/2+i*cone_diam/(n_layers-1)) * orthogonal_unit_vector for i in range(n_layers) for j in range(n_layers) ])    
+            ray_directions_list = [ np.array([0,0,-1000] + np.array([-200+i*100,-200+j*100,0]) ) for i in range(5) for j in range(5) ]
+            inv_trans = np.linalg.inv(obj.mesh_transform)
+            translation = inv_trans[:3,3]
+            rot = inv_trans[:3,:3]
+
+            ray_origins = np.vstack([hand.mesh_position.v for i in range(n_layers) for j in range(n_layers) ])
+            ray_directions = np.vstack(ray_directions_list)
+            ray_visualize = tm.load_path(np.hstack((
+                ray_origins,
+                ray_origins + ray_directions)).reshape(-1, 2, 3))
+            extended = np.hstack((hand.mesh_position.v,1))
+            ray_origins_obj_frame = np.vstack([ (inv_trans@extended)[:3] for i in range(n_layers) for j in range(n_layers) ])
+            ray_directions_obj_frame = np.vstack([rot @ ray_dir for ray_dir in ray_directions_list])    
+            ray_visualize_obj_frame = tm.load_path(np.hstack((
+                ray_origins_obj_frame,
+                ray_origins_obj_frame + ray_directions_obj_frame)).reshape(-1, 2, 3))
+            # mesh = tm.primitives.Cylinder(radius=60, height=1000)
+            # scene.delete_geometry('cyl')
+            # scene.add_geometry(mesh, geom_name='cyl')
+
+            scene.delete_geometry(hand.label+'vel_cone')
+            scene.add_geometry(ray_visualize, geom_name=hand.label+'vel_cone')
+            # scene.delete_geometry(hand.label+'vel_cone_of')
+            # scene.add_geometry(ray_visualize_obj_frame, geom_name=hand.label+'vel_cone_of')
+            if label in scene.geometry:
+                oobj = scene.geometry[label]
+                locations, index_ray, index_tri = oobj.ray.intersects_location(ray_origins=ray_origins_obj_frame,
+                                                                                ray_directions=ray_directions_obj_frame,
+                                                                                multiple_hits=False)
+                print(locations)
+                scene.delete_geometry(hand.label+'ray_impacts')
+                if len(locations)>0:
+                    impacts = tm.points.PointCloud(locations, colors=hand.color)
+                    # scene.add_geometry(impacts, geom_name=hand.label+'ray_impacts')
+                    scene.add_geometry(impacts, geom_name=hand.label+'ray_impacts',transform = obj.mesh_transform)
+            else:
+                print('Mesh '+label+' has not been loaded yet')
     def update_meshes(self, scene):
         self.update_hands_meshes(scene)
         self.update_object_meshes(scene)
@@ -105,9 +199,9 @@ class Scene :
         X =  0
         Y =  -250
         Z = 1000
+        self.test_cone = tm.creation.cone(50,500)
+        # self.mesh_scene.add_geometry(self.test_cone, geom_name='test_cone')
         self.mesh_scene.camera_transform = tm.transformations.rotation_matrix(np.pi, np.array([0,1,0]), np.array([0,0,0]))
-        base_origin = tm.primitives.Sphere(radius = 50)
-        base_origin.visual.face_colors = [0,255,0,255]
         frame_origin = np.array([[X, Y, Z],
                     [X, Y, Z],[X, Y, Z]])
         frame_axis_directions = np.array([[0, 0, 1],
@@ -131,8 +225,13 @@ class Scene :
 
 
         self.mesh_scene.add_geometry(plane, geom_name='plane')
-        self.mesh_scene.add_geometry(cam, geom_name='macamira')
-        self.mesh_scene.add_geometry(base_origin, geom_name='base_origin')
+        # self.mesh_scene.add_geometry(cam, geom_name='macamira')
+        # base_origin = tm.primitives.Sphere(radius = 50)
+        # base_origin.visual.face_colors = [0,255,0,255]
+        # self.mesh_scene.add_geometry(base_origin, geom_name='base_origin')
+        # cyl = tm.creation.cylinder(50,500)
+        # self.objects_collider.add_object('cyl', cyl)     
+        # self.mesh_scene.add_geometry(cyl, geom_name='cyl')
         self.t_scene = threading.Thread(target=self.display_meshes)
         self.t_scene.start()
 
@@ -170,25 +269,29 @@ class Scene :
         self.hands[pred.label] = Hand(pred, self.hand_detector.device)
         self.new_hand_meshes.append({'mesh' : self.hands[pred.label].mesh_origin, 'name': pred.label})
 
+    def new_object(self,pred, label, n):
+        pose=pred.poses[n]
+        render_box=pred.boxes_rend[n]
+        self.objects[label] = RigidObject(img_resolution= self.cam_data['res'], label=label,
+            pose = pose,
+            image_id=pred.infos.loc[n, 'batch_im_id'],
+            score=pred.infos['score'][n],
+            render_box=render_box)
+        self.new_object_meshes.append({'mesh' : self.objects[label].mesh, 'name': label})
+
         
     def update_objects(self, objects_predictions):
         if objects_predictions is not None:
             for n in range(len(objects_predictions)):
                 label=objects_predictions.infos.loc[n, 'label']
-                pose=objects_predictions.poses[n]
-                render_box=objects_predictions.boxes_rend[n]
-                render_box_crop=objects_predictions.boxes_crop[n]
+                #render_box_crop=objects_predictions.boxes_crop[n]
                 if label in self.objects:
+                    pose=objects_predictions.poses[n]
+                    render_box=objects_predictions.boxes_rend[n]
                     self.objects[label].update(pose, render_box)
                     #self.objects[label].mesh.apply_transform(tm.transformations.random_rotation_matrix())
-                else:
-                    self.objects[label] = RigidObject(img_resolution= self.cam_data['res'], label=label,
-                        pose = pose,
-                        image_id=objects_predictions.infos.loc[n, 'batch_im_id'],
-                        score=objects_predictions.infos['score'][n],
-                        render_box=render_box)
-                    
-                    self.mesh_scene.add_geometry(self.objects[label].mesh, geom_name=label)
+                else:                    
+                    self.new_object(objects_predictions,label,n)
         self.update_objects_fps()
         self.clean_objects()
 
@@ -264,15 +367,21 @@ class Scene :
         # self.mesh_scene.close()
 
 class Position:
-    def __init__(self, vect) -> None:
+    def __init__(self, vect, display='cm') -> None:
+        '''Position in millimeters'''
         vect[1] = -vect[1]
         self.x = vect[0]
         self.y = vect[1]
         self.z = vect[2]
         self.v = vect
+        self.display = display
 
     def __str__(self):
-        return str(self.v)
+        if self.display == 'cm':
+            return str(self.v*0.1)+' (in cm)'
+        else:
+            return str(self.v)+' (in mm)'
+
     
     def __call__(self):
         return self.v
@@ -294,25 +403,34 @@ class Orientation:
         return str(self.v)
     
 class Pose:
-    def __init__(self, tensor) -> None:
-        self.min_cutoffs = {'position' : 0.000001, 'orientation' : 0.001}
-        self.betas = {'position' : 5, 'orientation' : 0.5}
-        self.derivate_cutoff = {'position' : 1, 'orientation' : 1}
+    def __init__(self, tensor,position_factor=1, orientation_factor=1) -> None:
+        self.min_cutoffs = {'position' : 0.001, 'orientation' : 0.0001}
+        self.betas = {'position' : 100, 'orientation' : 10}
+        self.derivate_cutoff = {'position' : 0.1, 'orientation' : 1}
         attributes = ('position', 'orientation')
         self.filters={}
+        self.position_factor = position_factor
+        self.orientation_factor = orientation_factor
         for key in attributes:
             self.filters[key] = LandmarksSmoothingFilter(min_cutoff=self.min_cutoffs[key], beta=self.betas[key], derivate_cutoff=self.derivate_cutoff[key], disable_value_scaling=True)
         self.update(tensor)
 
     def update(self, tensor):
         self.mat = tensor.cpu().numpy()
-        self.raw_position = Position(self.mat[:3,3])
-        self.raw_orientation = Orientation(self.mat[:3,:3])
-        # self.position = Position(self.filters['position'].apply(self.mat[:3,3]))
-        self.position = self.raw_position
+        self.raw_position = Position(self.mat[:3,3]*self.position_factor)
+        # self.position = Position(self.filters['position'].apply(self.mat[:3,3]*self.position_factor))
+        # self.position = self.raw_position
+        self.position = Position(self.filters['position'].apply(self.mat[:3,3])*self.position_factor)
+        # print('self.raw_position')
         # print(self.raw_position)
+        # print('self.position')
         # print(self.position)
-        self.orientation = Orientation(self.filters['orientation'].apply(self.mat[:3,:3]))
+        # self.raw_orientation = Orientation(np.identity(3)*self.orientation_factor)
+        mat = self.mat[:3,:3]
+        # mat = np.identity(3)
+        self.raw_orientation = Orientation(mat*self.orientation_factor)
+        self.orientation = Orientation(self.filters['orientation'].apply(mat)*self.orientation_factor)
+        # self.orientation = self.raw_orientation
     
     def __str__(self):
         out = 'position : ' + str(self.position) + ' -- orientation : ' + str(self.orientation)
@@ -385,7 +503,7 @@ class RigidObject(Entity):
         self.image_id = image_id
         self.label = label
         self.color = (255, 0, 0)
-        self.pose = Pose(pose)
+        self.pose = Pose(pose, position_factor=1000)
         self.score = score
         self.render_box = Bbox(img_resolution, label, render_box)
         self.distances={}
@@ -394,6 +512,8 @@ class RigidObject(Entity):
         self.target_metric = 0
         self.appearing_radius = 0.2
         self.load_mesh()
+        self.mesh_pos = np.array([0,0,0])
+        self.mesh_transform = np.identity(4)
 
     def __str__(self):
         out = 'label: ' + str(self.label) + '\n pose: {' +str(self.pose)+'} \n nb_updates: '+str(self.nb_updates)
@@ -409,6 +529,11 @@ class RigidObject(Entity):
         try :
             self.mesh = tm.load_mesh(_TLESS_MESH_PATH+self.label+'.ply')
             print('MESH LOADED : ' +self.label+'.ply')
+            mesh_simplifier = pyfqmr.Simplify()
+            mesh_simplifier.setMesh(self.mesh.vertices,self.mesh.faces)
+            mesh_simplifier.simplify_mesh(target_count = 1000, aggressiveness=7, preserve_border=True, verbose=10)
+            v, f, n = mesh_simplifier.getMesh()
+            self.mesh = tm.Trimesh(vertices=v, faces=f, face_normals=n)
         except:
             self.mesh = None
             print('MESH LOADING FAILED')
@@ -421,13 +546,13 @@ class RigidObject(Entity):
         cv2.rectangle(img, (x,y-10), (self.render_box.corner2[0],self.render_box.corner1[1]), (200,200,200), -1)
         cv2.putText(img, text , (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, self.color)    
         y+=dy
-        text = 'x : ' + str(int(self.pose.position.x*100))+' cm'
+        text = 'x : ' + str(int(self.pose.position.x*0.1))+' cm'
         cv2.putText(img, text , (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.3, self.color)  
         y+=dy
-        text = 'y : ' + str(int(self.pose.position.y*100))+' cm'
+        text = 'y : ' + str(int(self.pose.position.y*0.1))+' cm'
         cv2.putText(img, text , (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.3, self.color)  
         y+=dy
-        text = 'z : ' + str(int(self.pose.position.z*100))+' cm'
+        text = 'z : ' + str(int(self.pose.position.z*0.1))+' cm'
         cv2.putText(img, text , (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.3, self.color)  
         y+=dy
         text = 'score : ' + str(int(self.score*100))+' cm'
@@ -516,11 +641,12 @@ class Hand(Entity):
 
         self.position = Position(self.xyz*np.array([1,-1,1])/1000)
         self.mesh_position = Position(self.xyz*np.array([1,1,1]))
+        self.mesh_position = Position(np.array([0,0,500]))
         self.mesh_origin = tm.primitives.Sphere(radius = 30)
         if self.label == 'right':
-            self.mesh_origin.visual.face_colors = [255,0,0,255]
+            self.mesh_origin.visual.face_colors = self.color = [255,0,0,255]
         else:  
-            self.mesh_origin.visual.face_colors = [0,0,100,255]
+            self.mesh_origin.visual.face_colors = self.color = [0,0,100,255]
 
     def update(self, depthai_hand):
         self.new = False

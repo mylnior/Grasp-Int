@@ -11,7 +11,7 @@ import networkx
 import pickle
 
 class GraspingDetector:
-    def __init__(self, device_name='OAK', hand_detection='OAK',  object_detection='cosypose') -> None:
+    def __init__(self, device_name='OAK', hand_detection='mediapipe',  object_detection='cosypose') -> None:
         
         self.hand_detection_mode = hand_detection
         self.object_detection_mode = object_detection
