@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>depthai_hand_tracker</name>
+  <version>0.0.0</version>
+  <description>depthai_hand_tracker</description>
+  <maintainer email="etienne.moullet@inria.fr">EtienneMo</maintainer>
+  <license>MIT</license>
+
+  <export>
+  </export>
+</package>

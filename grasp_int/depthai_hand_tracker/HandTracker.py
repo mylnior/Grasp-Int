@@ -1,10 +1,10 @@
 import numpy as np
 from collections import namedtuple
-import grasp_int.depthai_hand_tracker.mediapipe_utils as mpu
+import mediapipe_utils as mpu
 import depthai as dai
 import cv2
 from pathlib import Path
-from grasp_int.depthai_hand_tracker.FPS import FPS, now
+from FPS import FPS, now
 import time
 import sys
 from math import sin, cos
@@ -68,12 +68,12 @@ class HandTracker:
     def __init__(self, input_src=None,
                 pd_model=PALM_DETECTION_MODEL, 
                 pd_score_thresh=0.5, pd_nms_thresh=0.3,
-                use_lm=False,
+                use_lm=True,
                 lm_model="lite",
                 lm_score_thresh=0.5,
                 use_world_landmarks=False,
                 solo=False,
-                xyz=True,
+                xyz=False,
                 crop=False,
                 internal_fps=23,
                 resolution="full",
@@ -85,6 +85,7 @@ class HandTracker:
                 stats=False,
                 trace=0, 
                 ):
+
         self.pd_model = pd_model
         print(f"Palm detection blob : {self.pd_model}")
         if use_lm:
