@@ -2,11 +2,11 @@ import numpy as np
 from collections import namedtuple
 
 from numpy.lib.arraysetops import isin
-import mediapipe_utils as mpu
+import grasp_int.depthai_hand_tracker.mediapipe_utils as mpu
 import depthai as dai
 import cv2
 from pathlib import Path
-from FPS import FPS, now
+from grasp_int.depthai_hand_tracker.FPS import FPS, now
 import time
 import sys
 from string import Template
@@ -87,20 +87,21 @@ class HandTracker:
                 pd_model=PALM_DETECTION_MODEL, 
                 pd_score_thresh=0.5, pd_nms_thresh=0.3,
                 use_lm=True,
-                lm_model="lite",
+                lm_model="full",
                 lm_score_thresh=0.5,
                 use_world_landmarks=False,
                 pp_model = DETECTION_POSTPROCESSING_MODEL,
-                solo=True,
-                xyz=False,
+                solo=False,
+                xyz=True,
                 crop=False,
+                crop_ratio = 4/3,
                 internal_fps=None,
                 resolution="full",
-                internal_frame_height=640,
+                internal_frame_height=640,#640
                 use_gesture=False,
                 use_handedness_average=True,
                 single_hand_tolerance_thresh=10,
-                use_same_image=True,
+                use_same_image=False,
                 lm_nb_threads=2,
                 stats=False,
                 trace=0

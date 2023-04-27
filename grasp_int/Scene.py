@@ -16,6 +16,7 @@ from scipy.spatial.transform import Rotation as R
 from grasp_int.depthai_hand_tracker.HandTrackerRenderer import \
     HandTrackerRenderer
 from grasp_int.Filters import LandmarksSmoothingFilter
+from grasp_int.utils import *
 
 _DEFAULT_RENDERING_OPTIONS=dict(write_fps = True, 
                                 draw_hands=True, 
@@ -31,11 +32,15 @@ class Scene :
         self.hands = dict()
         self.objects = dict()
         self.cam_data = dict()
-        self.cam_data['res'] = device.img_resolution
-        self.cam_data['K'] = device.matrix
-        #self.cam['RT'] = device.extrinsics
         self.hand_detector = hand_detector
         self.object_detector = object_detector
+        if device is None:
+            self.cam_data['res'] = self.hand_detector.get_res()
+            self.cam_data['K'] = self.hand_detector.matrix
+        else:
+            self.cam_data['res'] = device.img_resolution
+            self.cam_data['K'] = device.matrix
+        #self.cam['RT'] = device.extrinsics
         self.rendering_options = rendering_options
         self.time_scene = time.time()
         self.time_hands = self.time_scene
@@ -62,7 +67,7 @@ class Scene :
         return s
     
     def display_meshes(self):
-        self.mesh_scene.show(callback=self.update_meshes,callback_period=1.0/15.0,line_settings={'point_size':10})
+        self.mesh_scene.show(callback=self.update_meshes,callback_period=1.0/30.0,line_settings={'point_size':20})
 
     def update_hands_meshes(self, scene):
         for i in range(len(self.new_hand_meshes)):
@@ -74,7 +79,7 @@ class Scene :
             scene.graph.update(label,matrix = hand.mesh_pos , geometry = label)
             if self.velocity_cone_mode == 'cone':
                 vdir = hand.normed_velocity
-                vdir = np.array([0,0.0001,-1])
+                vdir = np.array([0,0.0001,-1])                
                 zaxis = np.array([0,0,1])
                 vel_rot_mat = rotation_from_vectors(zaxis,vdir)
                 cone_len = self.cone_lenghts_spline(hand.scalar_velocity)
@@ -89,12 +94,33 @@ class Scene :
                 scene.add_geometry(hand.velocity_cone, geom_name = label+'vel_cone', transform = tot_mat)
                 self.check_collisions(hand.velocity_cone, tot_mat)
             else:
-                self.check_rays(scene,hand)
+                scene.delete_geometry(hand.label+'vel_cone')
+                hand.make_rays()
+                scene.add_geometry(hand.ray_visualize, geom_name=hand.label+'vel_cone')
+
+    def check_targets(self, scene):
+        for label, hand in self.hands.items():
+            for label, obj in self.objects.items():
+                if label in scene.geometry:
+                    mesh = scene.geometry[label]
+                    locations, _, _, obj_fr_viz = hand.check_rays(obj, mesh)
+
+                    scene.delete_geometry(hand.label+'vel_cone_ofr')
+                    scene.add_geometry(obj_fr_viz, geom_name=hand.label+'vel_cone_ofr')
+                    # print(locations)
+                    scene.delete_geometry(hand.label+obj.label+'ray_impacts')
+                    if len(locations)>0:
+                        impacts = tm.points.PointCloud(locations, colors=hand.color)
+                        # scene.add_geometry(impacts, geom_name=hand.label+'ray_impacts')
+                        scene.add_geometry(impacts, geom_name=hand.label+obj.label+'ray_impacts',transform = obj.mesh_transform)
+                else:
+                    print('Mesh '+label+' has not been loaded yet')
 
     def update_object_meshes(self, scene):
         for i in range(len(self.new_object_meshes)):
             new = self.new_object_meshes.pop(0)
             scene.add_geometry(new['mesh'], geom_name = new['name'])
+            scene.add_geometry(new['mesh'], geom_name = new['name']+str('idle'))
             # self.objects_collider.add_object(new['name'], new['mesh'])            
             print('add here')
             print(scene.geometry)
@@ -112,7 +138,7 @@ class Scene :
             # scene.geometry[label].apply_transform(mesh_transform)
             # self.objects_collider.set_transform(label,mesh_transform)           
             scene.graph.update(label, matrix=mesh_transform)
-            obj.mesh_transform = mesh_transform
+            obj.set_mesh_transform(mesh_transform)
             # self.check_intersect(obj)
 
     def check_collisions(self,cone, tf):
@@ -131,65 +157,11 @@ class Scene :
             intersect = tm.boolean.intersection(l, engine='blender')
             print(type(intersect))
 
-    def check_rays(self,scene,hand):
-        for label, obj in self.objects.items():
-            vdir = hand.normed_velocity
-            cone_len = self.cone_lenghts_spline(hand.scalar_velocity)
-            cone_diam = self.cone_diam_spline(hand.scalar_velocity)
-            n_layers = 5
-            # vecteur aléatoire
-            random_vector = np.random.rand(len(vdir))
 
-            # projection
-            projection = np.dot(random_vector, vdir)
-
-            # vecteur orthogonal
-            orthogonal_vector = random_vector - projection * vdir
-
-            # vecteur unitaire orthogonal
-            orthogonal_unit_vector = orthogonal_vector / np.linalg.norm(orthogonal_vector)
-
-            #ray_directions = np.vstack([ vdir*cone_len + (-cone_diam/2+i*cone_diam/(n_layers-1)) * orthogonal_unit_vector for i in range(n_layers) for j in range(n_layers) ])    
-            ray_directions_list = [ np.array([0,0,-1000] + np.array([-200+i*100,-200+j*100,0]) ) for i in range(5) for j in range(5) ]
-            inv_trans = np.linalg.inv(obj.mesh_transform)
-            translation = inv_trans[:3,3]
-            rot = inv_trans[:3,:3]
-
-            ray_origins = np.vstack([hand.mesh_position.v for i in range(n_layers) for j in range(n_layers) ])
-            ray_directions = np.vstack(ray_directions_list)
-            ray_visualize = tm.load_path(np.hstack((
-                ray_origins,
-                ray_origins + ray_directions)).reshape(-1, 2, 3))
-            extended = np.hstack((hand.mesh_position.v,1))
-            ray_origins_obj_frame = np.vstack([ (inv_trans@extended)[:3] for i in range(n_layers) for j in range(n_layers) ])
-            ray_directions_obj_frame = np.vstack([rot @ ray_dir for ray_dir in ray_directions_list])    
-            ray_visualize_obj_frame = tm.load_path(np.hstack((
-                ray_origins_obj_frame,
-                ray_origins_obj_frame + ray_directions_obj_frame)).reshape(-1, 2, 3))
-            # mesh = tm.primitives.Cylinder(radius=60, height=1000)
-            # scene.delete_geometry('cyl')
-            # scene.add_geometry(mesh, geom_name='cyl')
-
-            scene.delete_geometry(hand.label+'vel_cone')
-            scene.add_geometry(ray_visualize, geom_name=hand.label+'vel_cone')
-            # scene.delete_geometry(hand.label+'vel_cone_of')
-            # scene.add_geometry(ray_visualize_obj_frame, geom_name=hand.label+'vel_cone_of')
-            if label in scene.geometry:
-                oobj = scene.geometry[label]
-                locations, index_ray, index_tri = oobj.ray.intersects_location(ray_origins=ray_origins_obj_frame,
-                                                                                ray_directions=ray_directions_obj_frame,
-                                                                                multiple_hits=False)
-                print(locations)
-                scene.delete_geometry(hand.label+'ray_impacts')
-                if len(locations)>0:
-                    impacts = tm.points.PointCloud(locations, colors=hand.color)
-                    # scene.add_geometry(impacts, geom_name=hand.label+'ray_impacts')
-                    scene.add_geometry(impacts, geom_name=hand.label+'ray_impacts',transform = obj.mesh_transform)
-            else:
-                print('Mesh '+label+' has not been loaded yet')
     def update_meshes(self, scene):
         self.update_hands_meshes(scene)
         self.update_object_meshes(scene)
+        self.check_targets(scene)
 
     def define_mesh_scene(self):
         self.mesh_scene= tm.Scene()
@@ -213,14 +185,6 @@ class Scene :
         plane = tm.path.creation.grid(300, count = 10, plane_origin =  np.array([X, Y, Z]), plane_normal = np.array([0,1,0]))
         cam = tm.creation.camera_marker(self.mesh_scene.camera, marker_height = 300)
 
-        cone_max_length = 500
-        cone_min_length = 100
-        vmin=0.
-        vmax=300
-        cone_max_diam = 50
-        cone_min_diam = 10
-        self.cone_lenghts_spline = spline(vmin,vmax, cone_min_length, cone_max_length)
-        self.cone_diam_spline = spline(vmin,vmax, cone_min_diam, cone_max_diam)
         # lambda_length = 
 
 
@@ -255,8 +219,6 @@ class Scene :
         # print('hands_predictions')
         # print(hands_predictions)
         for hand_pred in hands_predictions:
-            # print('hand_pred.label')
-            # print(hand_pred.label)
             if hand_pred.label not in self.hands:
                 self.new_hand(hand_pred)
             else : 
@@ -266,7 +228,7 @@ class Scene :
         # self.evaluate_grasping_intention()
     
     def new_hand(self, pred):
-        self.hands[pred.label] = Hand(pred, self.hand_detector.device)
+        self.hands[pred.label] = Hand(pred, self.hand_detector)
         self.new_hand_meshes.append({'mesh' : self.hands[pred.label].mesh_origin, 'name': pred.label})
 
     def new_object(self,pred, label, n):
@@ -366,105 +328,13 @@ class Scene :
         self.t_scene.join()
         # self.mesh_scene.close()
 
-class Position:
-    def __init__(self, vect, display='cm') -> None:
-        '''Position in millimeters'''
-        vect[1] = -vect[1]
-        self.x = vect[0]
-        self.y = vect[1]
-        self.z = vect[2]
-        self.v = vect
-        self.display = display
-
-    def __str__(self):
-        if self.display == 'cm':
-            return str(self.v*0.1)+' (in cm)'
-        else:
-            return str(self.v)+' (in mm)'
-
-    
-    def __call__(self):
-        return self.v
-
-class Orientation:
-    def __init__(self, mat) -> None:
-        self.r = R.from_matrix(mat)
-        self.v = self.r.as_euler('xyz')
-        self.x = self.v[0]
-        self.y = self.v[1]
-        self.z = self.v[2]
-        self.q = self.r.as_quat()
-        self.qx = self.q[0]
-        self.qy = self.q[1]
-        self.qz = self.q[2]
-        self.qw = self.q[3]
-
-    def __str__(self):
-        return str(self.v)
-    
-class Pose:
-    def __init__(self, tensor,position_factor=1, orientation_factor=1) -> None:
-        self.min_cutoffs = {'position' : 0.001, 'orientation' : 0.0001}
-        self.betas = {'position' : 100, 'orientation' : 10}
-        self.derivate_cutoff = {'position' : 0.1, 'orientation' : 1}
-        attributes = ('position', 'orientation')
-        self.filters={}
-        self.position_factor = position_factor
-        self.orientation_factor = orientation_factor
-        for key in attributes:
-            self.filters[key] = LandmarksSmoothingFilter(min_cutoff=self.min_cutoffs[key], beta=self.betas[key], derivate_cutoff=self.derivate_cutoff[key], disable_value_scaling=True)
-        self.update(tensor)
-
-    def update(self, tensor):
-        self.mat = tensor.cpu().numpy()
-        self.raw_position = Position(self.mat[:3,3]*self.position_factor)
-        # self.position = Position(self.filters['position'].apply(self.mat[:3,3]*self.position_factor))
-        # self.position = self.raw_position
-        self.position = Position(self.filters['position'].apply(self.mat[:3,3])*self.position_factor)
-        # print('self.raw_position')
-        # print(self.raw_position)
-        # print('self.position')
-        # print(self.position)
-        # self.raw_orientation = Orientation(np.identity(3)*self.orientation_factor)
-        mat = self.mat[:3,:3]
-        # mat = np.identity(3)
-        self.raw_orientation = Orientation(mat*self.orientation_factor)
-        self.orientation = Orientation(self.filters['orientation'].apply(mat)*self.orientation_factor)
-        # self.orientation = self.raw_orientation
-    
-    def __str__(self):
-        out = 'position : ' + str(self.position) + ' -- orientation : ' + str(self.orientation)
-        return out
-    
-class Bbox:
-
-    def __init__(self, img_resolution, label, tensor) -> None:
-        self.filter = LandmarksSmoothingFilter(min_cutoff=0.001, beta=0.5, derivate_cutoff=1, disable_value_scaling=True)
-        
-        self.color = (255, 0, 0)
-        self.thickness = 2
-        self.label=label
-        self.img_resolution = img_resolution
-        self.update_coordinates(tensor)
-
-    def draw(self, img):
-        cv2.rectangle(img, self.corner1, self.corner2, self.color, self.thickness)
-    
-    def update_coordinates(self,tensor):
-        box = self.filter.apply(tensor.cpu().numpy())
-        self.corner1 = (min(int(box[0]), self.img_resolution[0]-self.thickness), min(int(box[1]), self.img_resolution[1]-self.thickness))
-        self.corner2 = (min(int(box[2]), self.img_resolution[0]-self.thickness), min(int(box[3]), self.img_resolution[1]-self.thickness))
-
-    def __str__(self) -> str:
-        s= 'Box <'+self.label+'> : ('+str(self.corner1)+','+str(self.corner2)+')'
-        return s
 
 class Entity:
     def __init__(self) -> None:
         self.visible = True
         self.lost = False
         self.invisible_time = 0
-        self.max_invisible_time = 0.3
+        self.max_invisible_time = 0.1
         self.raw = {}
         self.refined = {}
         self.derived = {}
@@ -502,7 +372,10 @@ class RigidObject(Entity):
         super().__init__()
         self.image_id = image_id
         self.label = label
-        self.color = (255, 0, 0)
+        if self.label == 'obj_000028':
+            self.color = (0, 0, 255)
+        else:
+            self.color = (255, 0, 0)
         self.pose = Pose(pose, position_factor=1000)
         self.score = score
         self.render_box = Bbox(img_resolution, label, render_box)
@@ -541,22 +414,29 @@ class RigidObject(Entity):
     def write(self, img):
         text = self.label 
         x = self.render_box.corner1[0]
-        y = self.render_box.corner1[1]-70
+        y = self.render_box.corner1[1]-40
         dy = 15
-        cv2.rectangle(img, (x,y-10), (self.render_box.corner2[0],self.render_box.corner1[1]), (200,200,200), -1)
+        cv2.rectangle(img, (x,y-20), (self.render_box.corner2[0],self.render_box.corner1[1]), (200,200,200), -1)
         cv2.putText(img, text , (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, self.color)    
-        y+=dy
-        text = 'x : ' + str(int(self.pose.position.x*0.1))+' cm'
-        cv2.putText(img, text , (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.3, self.color)  
-        y+=dy
-        text = 'y : ' + str(int(self.pose.position.y*0.1))+' cm'
-        cv2.putText(img, text , (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.3, self.color)  
-        y+=dy
-        text = 'z : ' + str(int(self.pose.position.z*0.1))+' cm'
-        cv2.putText(img, text , (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.3, self.color)  
-        y+=dy
-        text = 'score : ' + str(int(self.score*100))+' cm'
-        cv2.putText(img, text , (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.3, self.color)  
+        if self.label == 'obj_000028':
+            text ='TARGET'
+            y+=dy
+            cv2.putText(img, text , (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, self.color)  
+            text ='GRIP : PALMAR'
+            y+=dy
+            cv2.putText(img, text , (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, self.color)  
+        # y+=dy
+        # text = 'x : ' + str(int(self.pose.position.x*0.1))+' cm'
+        # cv2.putText(img, text , (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.3, self.color)  
+        # y+=dy
+        # text = 'y : ' + str(int(self.pose.position.y*0.1))+' cm'
+        # cv2.putText(img, text , (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.3, self.color)  
+        # y+=dy
+        # text = 'z : ' + str(int(self.pose.position.z*0.1))+' cm'
+        # cv2.putText(img, text , (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.3, self.color)  
+        # y+=dy
+        # text = 'score : ' + str(int(self.score*100))+' cm'
+        # cv2.putText(img, text , (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.3, self.color)  
 
     def write_dist(self, img):
         text = self.label
@@ -568,7 +448,7 @@ class RigidObject(Entity):
             cv2.putText(img, 'd-'+k+' : '+str(int(d)) +' cm' , (x,y+20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, self.color)    
             y+=dy
 
-    def render(self, img, bbox = True, txt=True, dist=True, overlay=False):
+    def render(self, img, bbox = True, txt=True, dist=False, overlay=False):
         if txt:
             self.write(img)
         if bbox:
@@ -596,6 +476,10 @@ class RigidObject(Entity):
         print(self.target_metric)
         return self.target_metric
 
+    def set_mesh_transform(self, tf):
+        self.mesh_transform=tf
+        self.inv_mesh_transform = np.linalg.inv(tf)
+
 
 class Hand(Entity):
     def __init__(self, depthai_hand, detector) -> None:
@@ -604,7 +488,10 @@ class Hand(Entity):
         self.visible = True
         self.invisible_time = 0
         self.max_invisible_time = 0.3
-        self.renderer = HandTrackerRenderer(detector)
+        if detector.type != 'HybridOAKMediapipeDetector':
+            self.renderer = HandTrackerRenderer(detector.device)
+        else:
+            self.draw = depthai_hand.draw
         self.raw = {}
         self.refined = {}
         self.derived = {}
@@ -621,8 +508,8 @@ class Hand(Entity):
         self.betas = {'landmarks' : 0.5, 'world_landmarks' : 0.5, 'xyz': 0.01}
         self.derivate_cutoff = {'landmarks' : 1, 'world_landmarks' : 1, 'xyz': 1}
 
-        self.derivative_min_cutoffs = {'landmarks' : 0.001, 'world_landmarks' : 0.001, 'xyz': 0.00001}
-        self.derivative_betas = {'landmarks' : 0.5, 'world_landmarks' : 0.5, 'xyz': 0.01}
+        self.derivative_min_cutoffs = {'landmarks' : 0.001, 'world_landmarks' : 0.001, 'xyz': 0.000000001}
+        self.derivative_betas = {'landmarks' : 1.5, 'world_landmarks' : 0.5, 'xyz': 0.001}
         self.derivative_derivate_cutoff = {'landmarks' : 1, 'world_landmarks' : 1, 'xyz': 1}
         self.cone_angle = np.pi/8
         self.position = None
@@ -641,12 +528,18 @@ class Hand(Entity):
 
         self.position = Position(self.xyz*np.array([1,-1,1])/1000)
         self.mesh_position = Position(self.xyz*np.array([1,1,1]))
-        self.mesh_position = Position(np.array([0,0,500]))
-        self.mesh_origin = tm.primitives.Sphere(radius = 30)
+        self.mesh_origin = tm.primitives.Sphere(radius = 20)
         if self.label == 'right':
             self.mesh_origin.visual.face_colors = self.color = [255,0,0,255]
         else:  
             self.mesh_origin.visual.face_colors = self.color = [0,0,100,255]
+        self.define_velocity_cones()
+
+    def define_velocity_cones(self,cone_max_length = 500, cone_min_length = 100, vmin=0., vmax=300, cone_max_diam = 50,cone_min_diam = 10, n_layers=5):
+
+        self.n_layers = n_layers
+        self.cone_lenghts_spline = spline(vmin,vmax, cone_min_length, cone_max_length)
+        self.cone_diam_spline = spline(vmin,vmax, cone_min_diam, cone_max_diam)
 
     def update(self, depthai_hand):
         self.new = False
@@ -670,7 +563,7 @@ class Hand(Entity):
     def propagate(self):
         if not self.lost:
             self.position = Position(self.xyz*np.array([1,-1,1])/1000)
-            self.mesh_position = Position(self.xyz*np.array([-1,-1,1]))
+            #self.mesh_position = Position(self.xyz*np.array([-1,-1,1]))
             if not self.new:
                 for key, key_indexes in self.refinable_keys.items():
                     new_refined=np.rint(self.filters[key].apply(self.raw[key])).astype(int)
@@ -679,23 +572,71 @@ class Hand(Entity):
                     self.derived_refined[key]=np.rint(self.derived_filters[key].apply(self.derived[key])).astype(int)
                 for key in self.refinable_keys:
                     self.__dict__[key] = self.refined[key]
-                self.velocity = self.derived_refined['xyz']
+                self.velocity = self.derived_refined['xyz']*np.array([-1,1,1])
                 self.scalar_velocity = np.linalg.norm(self.velocity)
                 if self.scalar_velocity != 0:
                     self.normed_velocity = self.velocity/self.scalar_velocity
                 else:
-                    self.normed_velocity = np.array([0,0,0])
+                    self.normed_velocity = np.array([0,0,0])            
+            self.mesh_position = Position(self.refined['xyz']*np.array([-1,-1,1]))
+
         else:
             self.velocity =  np.array([0,0,0])
             self.normed_velocity =  np.array([0,0,0])
 
     def render(self, img):
+        if 'renderer' in self.__dict__:
+            self.renderer_render(img)
+        else:
+            self.draw(img)
+
+    def renderer_render(self,img):
         if not self.lost:
             self.renderer.frame=img
             self.renderer.draw_hand(self)
 
+    def make_rays(self): 
+        vdir = self.normed_velocity
+        cone_len = self.cone_lenghts_spline(self.scalar_velocity)
+        cone_diam = self.cone_diam_spline(self.scalar_velocity)
+        vdir = np.array([-1,0,0])
+        cone_len = 300
+        cone_diam = 20
+        # vecteur aléatoire
+        random_vector = np.random.rand(len(vdir))
 
+        # projection
+        projection = np.dot(random_vector, vdir)
 
+        # vecteur orthogonal
+        orthogonal_vector = random_vector - projection * vdir
+
+        # vecteur unitaire orthogonal
+        orthogonal_unit_vector = orthogonal_vector / np.linalg.norm(orthogonal_vector)
+        orthogonal_unit_vector2 = np.cross(vdir, orthogonal_unit_vector)
+
+        self.ray_directions_list = [ vdir*cone_len + (-cone_diam/2+i*cone_diam/(self.n_layers-1)) * orthogonal_unit_vector+ (-cone_diam/2+j*cone_diam/(self.n_layers-1)) * orthogonal_unit_vector2 for i in range(self.n_layers) for j in range(self.n_layers) ] 
+
+        self.ray_origins = np.vstack([self.mesh_position.v for i in range(self.n_layers) for j in range(self.n_layers) ])
+        self.ray_directions = np.vstack(self.ray_directions_list)
+        self.ray_visualize = tm.load_path(np.hstack((
+            self.ray_origins,
+            self.ray_origins + self.ray_directions)).reshape(-1, 2, 3))     
+
+    def check_rays(self,obj, mesh):
+                        # ray_directions_list = [ np.array([0,-1000,0]) + np.array([-200+i*100,0,-200+j*100] ) for i in range(5) for j in range(5) ]
+        inv_trans = obj.inv_mesh_transform
+        rot = inv_trans[:3,:3]
+        ray_origins_obj_frame = np.vstack([ (inv_trans@self.position.ve)[:3] for i in range(self.n_layers) for j in range(self.n_layers) ])
+        ray_directions_obj_frame = np.vstack([rot @ ray_dir for ray_dir in self.ray_directions_list])    
+        locations, index_ray, index_tri = mesh.ray.intersects_location(ray_origins=ray_origins_obj_frame,
+                                                                        ray_directions=ray_directions_obj_frame,
+                                                                        multiple_hits=False)
+        ray_visualize_obj_frame = tm.load_path(np.hstack((
+                ray_origins_obj_frame,
+                ray_origins_obj_frame + ray_directions_obj_frame)).reshape(-1, 2, 3))
+        print(locations)
+        return locations, index_ray, index_tri, ray_visualize_obj_frame
 def rotation_from_vectors(v1, v2):
 
     # Calcul de l'axe et de l'angle de rotation

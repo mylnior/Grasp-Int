@@ -13,13 +13,15 @@ LINES_BODY = [[4,2],[2,0],[0,1],[1,3],
             [6,12],[12,11],[11,5],
             [12,14],[14,16],[11,13],[13,15]]
 
+_VEL_FACTOR = 0.5
+
 class HandTrackerRenderer:
     def __init__(self, 
                 tracker,
                 output=None):
 
         self.tracker = tracker
-
+        
         # Rendering flags
         if self.tracker.use_lm:
             self.show_pd_box = False
@@ -36,6 +38,7 @@ class HandTrackerRenderer:
             self.show_scores = False
 
         self.show_xyz_zone = self.show_xyz = self.tracker.xyz
+        self.show_xyz = False
         self.show_fps = True
         self.show_body = False # self.tracker.body_pre_focusing is not None
         self.show_inferences_status = False
@@ -56,6 +59,7 @@ class HandTrackerRenderer:
         if self.tracker.use_lm:
             # (info_ref_x, info_ref_y): coords in the image of a reference point 
             # relatively to which hands information (score, handedness, xyz,...) are drawn
+
             info_ref_x = hand.landmarks[0,0]
             info_ref_y = np.max(hand.landmarks[:,1])
 
@@ -133,13 +137,19 @@ class HandTrackerRenderer:
                 x0, y0 = info_ref_x - 40, info_ref_y + 40
             else:
                 x0, y0 = box_tl[0], box_br[1]+20
-            cv2.rectangle(self.frame, (x0,y0), (x0+100, y0+85), (220,220,240), -1)
-            cv2.putText(self.frame, f"X:{hand.xyz[0]/10:3.0f} cm", (x0+10, y0+20), cv2.FONT_HERSHEY_PLAIN, 1, (20,180,0), 2)
-            cv2.putText(self.frame, f"Y:{hand.xyz[1]/10:3.0f} cm", (x0+10, y0+45), cv2.FONT_HERSHEY_PLAIN, 1, (255,0,0), 2)
-            cv2.putText(self.frame, f"Z:{hand.xyz[2]/10:3.0f} cm", (x0+10, y0+70), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
+            cv2.rectangle(self.frame, (x0,y0), (x0+200, y0+85), (220,220,240), -1)
+            cv2.putText(self.frame, f"X:{hand.xyz[0]/10:3.0f} cm, "+f"vX:{hand.velocity[0]/10:3.0f} cm/s", (x0+10, y0+20), cv2.FONT_HERSHEY_PLAIN, 1, (20,180,0), 2)
+            cv2.putText(self.frame, f"Y:{hand.xyz[1]/10:3.0f} cm, "+f"vY:{hand.velocity[1]/10:3.0f} cm/s", (x0+10, y0+45), cv2.FONT_HERSHEY_PLAIN, 1, (255,0,0), 2)
+            cv2.putText(self.frame, f"Z:{hand.xyz[2]/10:3.0f} cm, "+f"vZ:{hand.velocity[2]/10:3.0f} cm/s", (x0+10, y0+70), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
+
+            pt2=(info_ref_x+np.rint(hand.velocity[0]*_VEL_FACTOR).astype(int), hand.landmarks[0,1]- np.rint(hand.velocity[1]*_VEL_FACTOR).astype(int))
+            pt1 = (info_ref_x, hand.landmarks[0,1])
+
+            cv2.arrowedLine(self.frame, pt1 ,pt2,(180,0,180), 2)
         if self.show_xyz_zone:
             # Show zone on which the spatial data were calculated
-            cv2.rectangle(self.frame, tuple(hand.xyz_zone[0:2]), tuple(hand.xyz_zone[2:4]), (180,0,180), 2)
+            #cv2.rectangle(self.frame, tuple(hand.xyz_zone[0:2]), tuple(hand.xyz_zone[2:4]), (180,0,180), 2)
+            cv2.rectangle(self.frame, (info_ref_x-10, hand.landmarks[0,1]-10), (info_ref_x+10, hand.landmarks[0,1]+10),(180,0,180), 2)
 
     def draw_body(self, body):
         lines = [np.array([body.keypoints[point] for point in line]) for line in LINES_BODY if body.scores[line[0]] > self.tracker.body_score_thresh and body.scores[line[1]] > self.tracker.body_score_thresh]

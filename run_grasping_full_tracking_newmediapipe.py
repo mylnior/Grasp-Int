@@ -3,8 +3,8 @@
 import argparse
 import threading
 from grasp_int import HandDetectors as hd
-from grasp_int import Object2DDetectors as o2d
-from grasp_int import ObjectPoseEstimators as ope
+from grasp_int import Object2DDetectors2 as o2d
+from grasp_int import ObjectPoseEstimators2 as ope
 from grasp_int import Devices as dv
 from grasp_int import Scene as sc
 import torch
@@ -20,16 +20,14 @@ def report_gpu():
    torch.cuda.empty_cache()
 
 class GraspingDetector:
-    def __init__(self, device_name='OAK', hand_detection='OAK',  object_detection='cosypose') -> None:
+    def __init__(self, hand_detection='OAK',  object_detection='cosypose') -> None:
         
         self.hand_detection_mode = hand_detection
         self.object_detection_mode = object_detection
-        self.device_name = device_name
-        self.device = dv.get_device(device_name)
-        self.hand_detector = hd.get_hand_detector(hand_detection, self.device)
-        self.object_detector = o2d.get_object_detector(object_detection, self.device)
-        self.object_pose_estimator = ope.get_pose_estimator(object_detection, self.device, use_tracking = True, fuse_detections=False)
-        self.scene = sc.Scene(device=self.device,hand_detector=self.hand_detector, name = 'Full tracking')
+        self.hand_detector = hd.get_hand_detector(hand_detection, None)
+        self.object_detector = o2d.get_object_detector(object_detection, self.hand_detector.resolution)
+        self.object_pose_estimator = ope.get_pose_estimator(object_detection, self.hand_detector.matrix, self.hand_detector.resolution, use_tracking = True, fuse_detections=False)
+        self.scene = sc.Scene(hand_detector=self.hand_detector, name = 'Full tracking')
         self.object_detections = None
         self.detect = True
         self.img = None
@@ -40,14 +38,11 @@ class GraspingDetector:
         self.beta = -81
         self.filter = False
         self.contrast = False
-        if self.device_name != 'OAK' and self.hand_detection_mode != 'mediapipe':
-            print('depthai may only be used on OAK device')
-            raise ValueError
         self.no_blur_zone = np.array([0])
         self.is_hands= False
 
     def objects_task(self):
-        while self.device.isOn():
+        while self.hand_detector.isOn():
             if self.do:
                 if self.img is None:
                     continue
@@ -62,11 +57,11 @@ class GraspingDetector:
                 self.scene.update_objects(self.objects_pose)
 
     def hands_task(self):
-        while self.device.isOn() :  
+        while self.hand_detector.isOn() :  
             if self.do:
                 if self.img is None:
                     continue
-                hands = self.hand_detector.get_hands(self.img)
+                hands = self.hand_detector.get_hands()
                 if hands is not None and len(hands)>0:
                     self.scene.update_hands(hands)
                     # for hand in hands:
@@ -85,14 +80,14 @@ class GraspingDetector:
 
     def run(self):
         print(self.__dict__)
-        self.device.start()
+        self.hand_detector.start()
         print('start')
         self.t_hand = threading.Thread(target=self.hands_task)
         self.t_obj = threading.Thread(target=self.objects_task)
         self.t_hand.start()
         self.t_obj.start()
-        while self.device.isOn():
-            success, img = self.device.next_frame()
+        while self.hand_detector.isOn():
+            success, img = self.hand_detector.next_frame()
             if self.contrast:
                 img = cv2.convertScaleAbs(img,alpha=self.alpha, beta=self.beta)
             if self.filter:
@@ -158,7 +153,6 @@ class GraspingDetector:
     def stop(self):
         self.t_hand.join()
         self.t_obj.join()
-        self.device.stop()
         self.object_detector.stop()
         exit()
 
@@ -168,10 +162,8 @@ class GraspingDetector:
 if __name__ == '__main__':
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('-d', '--device_name', choices=['OAK', 'monocular_webcam', 'stereo_webcam'],
-                        default='OAK', help="Video input device")
-    parser.add_argument('-hd', '--hand_detection', choices=['mediapipe', 'depthai'],
-                        default = 'depthai', help="Hand pose reconstruction solution")
+    parser.add_argument('-hd', '--hand_detection', choices=['mediapipe', 'depthai', 'hybridOAKMediapipe'],
+                        default = 'hybridOAKMediapipe', help="Hand pose reconstruction solution")
     parser.add_argument('-od', '--object_detection', choices=['cosypose, megapose'],
                         default = 'cosypose', help="Object pose reconstruction detection")
     args = vars(parser.parse_args())

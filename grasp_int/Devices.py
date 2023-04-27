@@ -6,6 +6,7 @@ import depthai as dai
 import numpy as np
 import json
 from pathlib import Path
+#from grasp_int.depthai_hand_tracker.HandTracker import HandTracker
 from grasp_int.depthai_hand_tracker.HandTrackerEdge import HandTracker
 
 _DEFAULT_CAM_SETTINGS_PATH = './default_cam_settings.yaml'
