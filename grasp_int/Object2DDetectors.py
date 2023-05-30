@@ -43,7 +43,7 @@ class Object2DDetector:
         self.detecting = True
         self.detector_kwargs = dict(one_instance_per_class=False, detection_th=detection_threshold)
 
-
+        self.detections = None
         self.prediction_score_threshold = 0.8
 
         self.it =0
@@ -127,10 +127,10 @@ class Object2DDetector:
             #     self.detections = None
             #     self.detecting =True
             # exit()
+            if len(self.detections)<=0:
+                self.detections=None
         else:
             self.detections = None
-        if len(self.detections)<=0:
-            self.detections=None
         return self.detections
     
     def stop(self):

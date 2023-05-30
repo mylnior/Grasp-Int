@@ -62,7 +62,8 @@ class Scene :
 
     def __str__(self) -> str:
         s = 'SCENE \n OBJECTS :\n'
-        for obj in self.objects.values():
+        objs = self.objects.copy().items()
+        for obj in self.objs:
             s+=str(obj)+'\n'
         return s
     
@@ -74,7 +75,8 @@ class Scene :
             new = self.new_hand_meshes.pop(0)
             scene.add_geometry(new['mesh'], geom_name = new['name'])
         
-        for label, hand in self.hands.items():
+        hands = self.hands.copy().items()
+        for label, hand in hands:
             hand.mesh_pos = tm.transformations.compose_matrix(translate = hand.mesh_position.v)
             scene.graph.update(label,matrix = hand.mesh_pos , geometry = label)
             if self.velocity_cone_mode == 'cone':
@@ -97,16 +99,18 @@ class Scene :
                 scene.delete_geometry(hand.label+'vel_cone')
                 hand.make_rays()
                 scene.add_geometry(hand.ray_visualize, geom_name=hand.label+'vel_cone')
+                #self.check_rays(scene,hand)
 
-    def check_targets(self, scene):
-        for label, hand in self.hands.items():
-            for label, obj in self.objects.items():
-                if label in scene.geometry:
-                    mesh = scene.geometry[label]
-                    locations, _, _, obj_fr_viz = hand.check_rays(obj, mesh)
-
-                    scene.delete_geometry(hand.label+'vel_cone_ofr')
-                    scene.add_geometry(obj_fr_viz, geom_name=hand.label+'vel_cone_ofr')
+    def check_all_targets(self, scene):
+        targets = {}
+        hands = self.hands.copy()
+        objs = self.objects.copy()
+        for hlabel, hand in hands.items(): 
+            for olabel, obj in objs.items():
+                if olabel in scene.geometry:
+                    mesh = scene.geometry[olabel]
+                    locations, _, _ = hand.check_rays(obj, mesh)
+                    hand.set_object_cone_impact(obj, locations)
                     # print(locations)
                     scene.delete_geometry(hand.label+obj.label+'ray_impacts')
                     if len(locations)>0:
@@ -114,19 +118,28 @@ class Scene :
                         # scene.add_geometry(impacts, geom_name=hand.label+'ray_impacts')
                         scene.add_geometry(impacts, geom_name=hand.label+obj.label+'ray_impacts',transform = obj.mesh_transform)
                 else:
-                    print('Mesh '+label+' has not been loaded yet')
+                    print('Mesh '+olabel+' has not been loaded yet')
+            targets[hlabel]= hand.fetch_targets()
+            
+        for olabel in objs:
+            target_info = (False, None, None)
+            for hlabel in hands:
+                if olabel in targets[hlabel]:
+                    target_info=(True, self.hands[hlabel], targets[hlabel][olabel])
+                    self.objects[olabel].set_target_info(target_info)
+
 
     def update_object_meshes(self, scene):
         for i in range(len(self.new_object_meshes)):
             new = self.new_object_meshes.pop(0)
             scene.add_geometry(new['mesh'], geom_name = new['name'])
-            scene.add_geometry(new['mesh'], geom_name = new['name']+str('idle'))
             # self.objects_collider.add_object(new['name'], new['mesh'])            
             print('add here')
             print(scene.geometry)
             print('add there')
 
-        for label, obj in self.objects.items():
+        objs = self.objects.copy().items()
+        for label, obj in objs:
             obj.mesh_pos = obj.pose.position.v*np.array([-1,1,1])
             mesh_orient_quat = [obj.pose.orientation.q[i] for i in range(4)]
             mesh_orient_angles = obj.pose.orientation.v*np.array([-1,-1,-1])+np.pi*np.array([1  ,1,0])
@@ -139,7 +152,6 @@ class Scene :
             # self.objects_collider.set_transform(label,mesh_transform)           
             scene.graph.update(label, matrix=mesh_transform)
             obj.set_mesh_transform(mesh_transform)
-            # self.check_intersect(obj)
 
     def check_collisions(self,cone, tf):
         collision, name, data = self.objects_collider.in_collision_single(cone, transform=tf, return_data=True, return_names=True)
@@ -150,18 +162,12 @@ class Scene :
                 print('point : '+str(dat.point))
                 print('depth : '+str(dat.depth))
 
-    def check_intersect(self, hand):
-        for hand in self.hands.values():
-            l = [obj.mesh,self.test_cone]
-            print(l)
-            intersect = tm.boolean.intersection(l, engine='blender')
-            print(type(intersect))
 
 
     def update_meshes(self, scene):
         self.update_hands_meshes(scene)
         self.update_object_meshes(scene)
-        self.check_targets(scene)
+        self.check_all_targets(scene)
 
     def define_mesh_scene(self):
         self.mesh_scene= tm.Scene()
@@ -200,26 +206,31 @@ class Scene :
         self.t_scene.start()
 
     def evaluate_grasping_intention(self):
-        for obj in self.objects.values():
-            for hand in self.hands.values():
+        hands = self.hands.copy().values
+        objs = self.objects.values()
+        for obj in objs():
+            for hand in hands:
                 if hand.label=='right':
                     obj.is_targeted_by(hand)
 
     def propagate_hands(self):
-        for hand in self.hands.values():
+        hands = self.hands.copy().values()
+        for hand in hands:
             hand.propagate()
 
-    def clean_hands(self, hands):
-        hands_label = [hand.label for hand in hands]
-        for label in self.hands:
+    def clean_hands(self, newhands):
+        hands_label = [hand.label for hand in newhands]
+        hands = self.hands.copy()
+        for label in hands:
             self.hands[label].setvisible(label in hands_label)
 
     def update_hands(self, hands_predictions):
         self.update_hands_fps()
         # print('hands_predictions')
         # print(hands_predictions)
+        hands = self.hands.copy()
         for hand_pred in hands_predictions:
-            if hand_pred.label not in self.hands:
+            if hand_pred.label not in hands:
                 self.new_hand(hand_pred)
             else : 
                 self.hands[hand_pred.label].update(hand_pred)
@@ -243,11 +254,13 @@ class Scene :
 
         
     def update_objects(self, objects_predictions):
+        hands = self.hands.copy()
+        objs = self.objects.copy()
         if objects_predictions is not None:
             for n in range(len(objects_predictions)):
                 label=objects_predictions.infos.loc[n, 'label']
                 #render_box_crop=objects_predictions.boxes_crop[n]
-                if label in self.objects:
+                if label in objs:
                     pose=objects_predictions.poses[n]
                     render_box=objects_predictions.boxes_rend[n]
                     self.objects[label].update(pose, render_box)
@@ -260,7 +273,8 @@ class Scene :
     def update_hands_fps(self):
         now = time.time()
         self.elapsed_hands= now - self.time_hands 
-        for hand in self.hands.values():
+        hands = self.hands.copy().values()
+        for hand in hands:
             hand.set_elapsed(self.elapsed_hands)
         self.fps_hands = 1 / self.elapsed_hands
         self.time_hands = now
@@ -286,7 +300,8 @@ class Scene :
 
     def clean_objects(self):
         todel=[]
-        for label in self.objects.keys():
+        objs = self.objects.copy()
+        for label in objs.keys():
             if self.objects[label].nb_updates <=0:
                 todel.append(label)
             self.objects[label].nb_updates-=1
@@ -295,21 +310,25 @@ class Scene :
             print('object '+key+' forgotten')
 
     def compute_distances(self):
-        for obj in self.objects.values():
-            for hand in self.hands.values():
+        hands = self.hands.copy().values()
+        objs = self.objects.copy().values()
+        for obj in objs:
+            for hand in hands:
                 obj.distance_to(hand)
 
 
     def render(self, img):
         self.compute_distances()
         self.update_scene_fps()
+        hands = self.hands.copy().values()
+        objs = self.objects.copy().values()
         #if self.rendering_options['draw_hands']:
         #    self.hand_detector.draw_landmarks(img)
         #if self.rendering_options['write_hands_pos']:
         #    self.hand_detector.write_pos(img)
-        for hand in self.hands.values():
+        for hand in hands:
             hand.render(img)
-        for obj in self.objects.values():
+        for obj in objs:
             obj.render(img)
         if self.rendering_options['write_fps']:
             self.write_fps(img)
@@ -328,6 +347,60 @@ class Scene :
         self.t_scene.join()
         # self.mesh_scene.close()
 
+    def check_rays(self,scene,hand):
+        objs = self.objects.copy().items()
+        for label, obj in objs:
+            vdir = hand.normed_velocity
+            n_layers = 5
+            # vecteur aléatoire
+            random_vector = np.random.rand(len(vdir))
+
+            # projection
+            projection = np.dot(random_vector, vdir)
+
+            # vecteur orthogonal
+            orthogonal_vector = random_vector - projection * vdir
+
+            # vecteur unitaire orthogonal
+
+            #ray_directions = np.vstack([ vdir*cone_len + (-cone_diam/2+i*cone_diam/(n_layers-1)) * orthogonal_unit_vector for i in range(n_layers) for j in range(n_layers) ])    
+            ray_directions_list = [ np.array([0,0,1000] + np.array([-200+i*100,-200+j*100,0]) ) for i in range(5) for j in range(5) ]
+            inv_trans = np.linalg.inv(obj.mesh_transform)
+            translation = inv_trans[:3,3]
+            rot = inv_trans[:3,:3]
+
+            ray_origins = np.vstack([hand.mesh_position.v for i in range(n_layers) for j in range(n_layers) ])
+            ray_directions = np.vstack(ray_directions_list)
+            ray_visualize = tm.load_path(np.hstack((
+                ray_origins,
+                ray_origins + ray_directions)).reshape(-1, 2, 3))
+            extended = np.hstack((hand.mesh_position.v,1))
+            ray_origins_obj_frame = np.vstack([ (inv_trans@extended)[:3] for i in range(n_layers) for j in range(n_layers) ])
+            ray_directions_obj_frame = np.vstack([rot @ ray_dir for ray_dir in ray_directions_list])    
+            ray_visualize_obj_frame = tm.load_path(np.hstack((
+                ray_origins_obj_frame,
+                ray_origins_obj_frame + ray_directions_obj_frame)).reshape(-1, 2, 3))
+            # mesh = tm.primitives.Cylinder(radius=60, height=1000)
+            # scene.delete_geometry('cyl')
+            # scene.add_geometry(mesh, geom_name='cyl')
+
+            scene.delete_geometry(hand.label+'vel_cone')
+            scene.add_geometry(ray_visualize, geom_name=hand.label+'vel_cone')
+            # scene.delete_geometry(hand.label+'vel_cone_of')
+            # scene.add_geometry(ray_visualize_obj_frame, geom_name=hand.label+'vel_cone_of')
+            if label in scene.geometry:
+                oobj = scene.geometry[label]
+                locations, index_ray, index_tri = oobj.ray.intersects_location(ray_origins=ray_origins_obj_frame,
+                                                                                ray_directions=ray_directions_obj_frame,
+                                                                                multiple_hits=False)
+                print(locations)
+                scene.delete_geometry(hand.label+'ray_impacts')
+                if len(locations)>0:
+                    impacts = tm.points.PointCloud(locations, colors=hand.color)
+                    # scene.add_geometry(impacts, geom_name=hand.label+'ray_impacts')
+                    scene.add_geometry(impacts, geom_name=hand.label+'ray_impacts',transform = obj.mesh_transform)
+            else:
+                print('Mesh '+label+' has not been loaded yet')
 
 class Entity:
     def __init__(self) -> None:
@@ -372,10 +445,7 @@ class RigidObject(Entity):
         super().__init__()
         self.image_id = image_id
         self.label = label
-        if self.label == 'obj_000028':
-            self.color = (0, 0, 255)
-        else:
-            self.color = (255, 0, 0)
+        self.default_color = (0, 255, 0)
         self.pose = Pose(pose, position_factor=1000)
         self.score = score
         self.render_box = Bbox(img_resolution, label, render_box)
@@ -387,6 +457,10 @@ class RigidObject(Entity):
         self.load_mesh()
         self.mesh_pos = np.array([0,0,0])
         self.mesh_transform = np.identity(4)
+        self.is_targeted = False
+        self.targeter = None
+        self.target_info = None
+        self.update_display()
 
     def __str__(self):
         out = 'label: ' + str(self.label) + '\n pose: {' +str(self.pose)+'} \n nb_updates: '+str(self.nb_updates)
@@ -418,8 +492,8 @@ class RigidObject(Entity):
         dy = 15
         cv2.rectangle(img, (x,y-20), (self.render_box.corner2[0],self.render_box.corner1[1]), (200,200,200), -1)
         cv2.putText(img, text , (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, self.color)    
-        if self.label == 'obj_000028':
-            text ='TARGET'
+        if self.is_targeted:
+            text ='TARGETED BY : ' + self.targeter.label + ' - proba : '+str(self.target_info.get_proba())
             y+=dy
             cv2.putText(img, text , (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, self.color)  
             text ='GRIP : PALMAR'
@@ -480,6 +554,21 @@ class RigidObject(Entity):
         self.mesh_transform=tf
         self.inv_mesh_transform = np.linalg.inv(tf)
 
+    def set_target_info(self, info):
+        self.is_targeted = info[0]
+        self.targeter = info[1]
+        self.target_info = info[2]
+        self.update_display()
+
+    def update_display(self):
+        if self.is_targeted:
+            self.color = self.targeter.color
+            thickness = 4
+            print('ISTARGETESD')
+        else:
+            self.color = self.default_color
+            thickness = 2
+        self.render_box.update_display(self.color, thickness)
 
 class Hand(Entity):
     def __init__(self, depthai_hand, detector) -> None:
@@ -534,6 +623,7 @@ class Hand(Entity):
         else:  
             self.mesh_origin.visual.face_colors = self.color = [0,0,100,255]
         self.define_velocity_cones()
+        self.target_detector = TargetDetector(self.label)
 
     def define_velocity_cones(self,cone_max_length = 500, cone_min_length = 100, vmin=0., vmax=300, cone_max_diam = 50,cone_min_diam = 10, n_layers=5):
 
@@ -599,9 +689,6 @@ class Hand(Entity):
         vdir = self.normed_velocity
         cone_len = self.cone_lenghts_spline(self.scalar_velocity)
         cone_diam = self.cone_diam_spline(self.scalar_velocity)
-        vdir = np.array([-1,0,0])
-        cone_len = 300
-        cone_diam = 20
         # vecteur aléatoire
         random_vector = np.random.rand(len(vdir))
 
@@ -624,19 +711,27 @@ class Hand(Entity):
             self.ray_origins + self.ray_directions)).reshape(-1, 2, 3))     
 
     def check_rays(self,obj, mesh):
-                        # ray_directions_list = [ np.array([0,-1000,0]) + np.array([-200+i*100,0,-200+j*100] ) for i in range(5) for j in range(5) ]
+        # ray_directions_list = [ np.array([0,-1000,0]) + np.array([-200+i*100,0,-200+j*100] ) for i in range(5) for j in range(5) ]
         inv_trans = obj.inv_mesh_transform
         rot = inv_trans[:3,:3]
-        ray_origins_obj_frame = np.vstack([ (inv_trans@self.position.ve)[:3] for i in range(self.n_layers) for j in range(self.n_layers) ])
+        ray_origins_obj_frame = np.vstack([ (inv_trans@self.mesh_position.ve)[:3] for i in range(self.n_layers) for j in range(self.n_layers) ])
         ray_directions_obj_frame = np.vstack([rot @ ray_dir for ray_dir in self.ray_directions_list])    
-        locations, index_ray, index_tri = mesh.ray.intersects_location(ray_origins=ray_origins_obj_frame,
-                                                                        ray_directions=ray_directions_obj_frame,
-                                                                        multiple_hits=False)
-        ray_visualize_obj_frame = tm.load_path(np.hstack((
-                ray_origins_obj_frame,
-                ray_origins_obj_frame + ray_directions_obj_frame)).reshape(-1, 2, 3))
-        print(locations)
-        return locations, index_ray, index_tri, ray_visualize_obj_frame
+        try:
+            locations, index_ray, index_tri = mesh.ray.intersects_location(ray_origins=ray_origins_obj_frame,
+                                                                            ray_directions=ray_directions_obj_frame,
+                                                                            multiple_hits=False)
+        except:
+            locations, index_ray, index_tri = (), (), ()
+        return locations, index_ray, index_tri
+
+    
+    def set_object_cone_impact(self, object, impact_locations):
+        self.target_detector.new_impacts(object, impact_locations)
+
+    def fetch_targets(self):
+        self.most_probable_target, targets = self.target_detector.get_most_probable_target()
+        return targets
+        
 def rotation_from_vectors(v1, v2):
 
     # Calcul de l'axe et de l'angle de rotation

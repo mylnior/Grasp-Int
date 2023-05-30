@@ -256,7 +256,9 @@ class HybridOAKMediapipeDetector(dv.Device):
         self.fps = 40
         self.lensPos = 150
         self.expTime = 8000
+        self.expTime = 2000
         self.sensIso = 500    
+        self.sensIso = 200    
         self.wbManual = 4000
         self.rgb_res = dai.ColorCameraProperties.SensorResolution.THE_1080_P
         self.mono_res = dai.MonoCameraProperties.SensorResolution.THE_400_P
@@ -265,7 +267,7 @@ class HybridOAKMediapipeDetector(dv.Device):
         self.res_idx = 1
         self.device.startPipeline(self.create_pipeline())
 
-        self.crop = True
+        self.crop = False
         self.resolution = self.resolutions[self.res_idx]
         if self.crop:
             self.croped_resolution = (self.resolution[1], self.resolution[1])
@@ -279,6 +281,8 @@ class HybridOAKMediapipeDetector(dv.Device):
         resolution_num = int(re.findall("\d+", str(self.mono_res))[0])
         self.stereoInference = StereoInference(self.device, (400,400))
 
+        self.frame = None
+        self.new_frame = False
         self.detection_result=None
         self.hands=[]
         options = HandLandmarkerOptions(
@@ -442,7 +446,8 @@ class HybridOAKMediapipeDetector(dv.Device):
         if d_frame is not None:
             frame = d_frame.getFrame()
             frame = cv2.resize(frame, self.resolution)
-            frame = crop_to_rect(frame)
+            if self.crop:
+                frame = crop_to_rect(frame)
             self.depth_map=cv2.flip(frame,1)
 
             depthFrameColor = cv2.normalize(self.depth_map, None, 255, 0, cv2.NORM_INF, cv2.CV_8UC1)
@@ -454,18 +459,24 @@ class HybridOAKMediapipeDetector(dv.Device):
             frame = r_frame.getCvFrame()
             # cv2.imshow('raw_'+name, frame)
             frame = cv2.resize(frame, self.resolution)
-            frame = crop_to_rect(frame)
+            if self.crop:
+                frame = crop_to_rect(frame)
             frame=cv2.flip(frame,1)
-            mp_frame = cv2.cvtColor(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
-            if frame is not None:
-            # if frame is not None and depthFrame is not None:
-                frame_timestamp_ms = round(time.time()*1000)
-                mp_image = mp.Image(image_format=self.format, data=mp_frame)
-                self.landmarker.detect_async(mp_image, frame_timestamp_ms)
-                success = True
+            success = True
+            self.frame = frame
+            self.new_frame = True
+        else:
+            self.frame = None
         return success, frame
     
     def get_hands(self):
+        if self.frame is not None and self.new_frame:
+        # if frame is not None and depthFrame is not None:
+            mp_frame = cv2.cvtColor(cv2.cvtColor(self.frame, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
+            frame_timestamp_ms = round(time.time()*1000)
+            mp_image = mp.Image(image_format=self.format, data=mp_frame)
+            self.landmarker.detect_async(mp_image, frame_timestamp_ms)
+            self.new_frame = False
         return self.hands
 
 
@@ -600,9 +611,10 @@ class StereoInference:
         wrist = np_landmarks[0]
         thumb = np_landmarks[1]
         box_size = 10
+        print('depth_map.shape', depth_map.shape)
         #box_size = max(5, int(np.linalg.norm(wrist-thumb)))/2
         xmin = max(int(wrist[0]-box_size),0)
-        xmax = min(int(wrist[0]+box_size), int(depth_map.shape[0]))
+        xmax = min(int(wrist[0]+box_size), int(depth_map.shape[1]))
         ymin = max(int(wrist[1]-box_size),0 )
         ymax = min(int(wrist[1]+box_size), int(depth_map.shape[0]))
         if xmin > xmax:  # bbox flipped

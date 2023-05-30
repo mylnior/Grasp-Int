@@ -172,7 +172,7 @@ class HandTracker:
             if internal_fps is None:
                 if lm_model == "full":
                     if self.xyz:
-                        self.internal_fps = 22 
+                        self.internal_fps = 30 
                     else:
                         self.internal_fps = 26 
                 elif lm_model == "lite":

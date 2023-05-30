@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+import time
 import argparse
 import threading
 from grasp_int import HandDetectors as hd
@@ -26,9 +26,7 @@ class GraspingDetector:
         self.object_detection_mode = object_detection
         self.hand_detector = hd.get_hand_detector(hand_detection, None)
         self.object_detector = o2d.get_object_detector(object_detection, self.hand_detector.resolution)
-        self.object_pose_estimator = ope.get_pose_estimator(object_detection, self.hand_detector.matrix, self.hand_detector.resolution, use_tracking = True, fuse_detections=False)
         self.scene = sc.Scene(hand_detector=self.hand_detector, name = 'Full tracking')
-        self.object_detections = None
         self.img = None
         self.alpha = -0.2
         self.beta = -30
@@ -39,27 +37,6 @@ class GraspingDetector:
         self.no_blur_zone = np.array([0])
         self.is_hands= False
 
-    def estimate_objects_task(self, start_event, estimate_event):
-        while self.hand_detector.isOn():
-            start_flag = start_event.wait(1)
-            if start_flag:
-                if estimate_event.wait(1):
-                    self.objects_pose = self.object_pose_estimator.estimate(self.img, detections = self.object_detections)
-                    self.scene.update_objects(self.objects_pose)
-
-    def detect_objects_task(self, start_event, detect_event, estimate_event):
-        while self.hand_detector.isOn():
-            start_flag = start_event.wait(1)
-            if start_flag:
-                detect_flag = detect_event.wait(1)
-                if detect_flag:
-                    self.object_detections = self.object_detector.detect(self.img)
-
-                    if self.object_detections is not None:
-                        detect_event.clear()
-                        estimate_event.set()
-                else:
-                    self.object_detections = None
 
     def hands_task(self, start_event, new_image_event):
         while self.hand_detector.isOn() :  
@@ -76,16 +53,12 @@ class GraspingDetector:
         self.hand_detector.start()
         print('start')
         start_event = threading.Event()
-        detect_event = threading.Event()
-        estimate_event = threading.Event()
         new_image_event = threading.Event()
         self.t_hand = threading.Thread(target=self.hands_task, args=(start_event, new_image_event,))
-        self.t_obj_d = threading.Thread(target=self.detect_objects_task, args=(start_event, detect_event,estimate_event,))
-        self.t_obj_e = threading.Thread(target=self.estimate_objects_task, args=(start_event, estimate_event,))
+        success, img = self.hand_detector.next_frame()
         self.t_hand.start()
-        self.t_obj_d.start()
-        self.t_obj_e.start()
         while self.hand_detector.isOn():
+            print('new_image_event.is_set()',new_image_event.is_set())
             success, img = self.hand_detector.next_frame()
             if not success:
                 self.img = None
@@ -93,12 +66,10 @@ class GraspingDetector:
             else:
                 new_image_event.set()
                 new_image_event.clear()
-                estimate_event.set()
-                estimate_event.clear()
                 self.img = img
             self.img.flags.writeable = True
             k = cv2.waitKey(10)
-            if k == 32:
+            if k == 32 :
                 print('DOOOOOOOOOOOOOOOOOOOO')
                 print('DOOOOOOOOOOOOOOOOOOOO')
                 print('DOOOOOOOOOOOOOOOOOOOO')
@@ -109,17 +80,6 @@ class GraspingDetector:
                 print('DOOOOOOOOOOOOOOOOOOOO')
                 print('DOOOOOOOOOOOOOOOOOOOO')
                 start_event.set()
-            if k == 32:
-                print('DETEEEEEEEEEEEEEEEEEECT')
-                print('DETEEEEEEEEEEEEEEEEEECT')
-                print('DETEEEEEEEEEEEEEEEEEECT')
-                print('DETEEEEEEEEEEEEEEEEEECT')
-                print('DETEEEEEEEEEEEEEEEEEECT')
-                print('DETEEEEEEEEEEEEEEEEEECT')
-                print('DETEEEEEEEEEEEEEEEEEECT')
-                print('DETEEEEEEEEEEEEEEEEEECT')
-                detect_event.set()
-                estimate_event.set()
             if self.scene.render(self.img):
                 print('end')
                 self.stop()
@@ -128,7 +88,6 @@ class GraspingDetector:
 
     def stop(self):
         self.t_hand.join()
-        self.t_obj.join()
         self.object_detector.stop()
         exit()
 

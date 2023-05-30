@@ -82,11 +82,7 @@ class Bbox:
     def __init__(self, img_resolution, label, tensor) -> None:
         self.filter = LandmarksSmoothingFilter(min_cutoff=0.001, beta=0.5, derivate_cutoff=1, disable_value_scaling=True)
         
-        self.label=label
-        if self.label == 'obj_000028':
-            self.color = (0, 0, 255)
-        else:
-            self.color = (255, 0, 0)
+        self.color = (255, 0, 0)
         self.thickness = 2
         self.img_resolution = img_resolution
         self.update_coordinates(tensor)
@@ -102,3 +98,114 @@ class Bbox:
     def __str__(self) -> str:
         s= 'Box <'+self.label+'> : ('+str(self.corner1)+','+str(self.corner2)+')'
         return s
+    
+    def update_display(self, color, thickness):
+        self.color = color
+        self.thickness = thickness
+
+    
+class DataWindow:
+    def __init__(self, size:int) -> None:
+        self.size = size # nb iterations or time limit ?
+        self.data = list()
+        self.nb_samples = 0
+    
+    def queue(self, new_data):
+        self.data.append(new_data)
+        if len(self.data)>= self.size:
+            del self.data[0]
+        else:
+            self.nb_samples+=1
+
+
+
+class HandConeImpactsWindow(DataWindow):
+    def __init__(self, size: int) -> None:
+        super().__init__(size)
+        self.nb_impacts = 0
+
+    def mean(self):
+        if self.nb_samples==0:
+            return None
+        sum = 0
+        for i in range(self.data):
+            sum+=np.mean(self.data[i])
+        return sum/self.nb_samples
+
+    def queue(self, new_data):
+        self.data.append(new_data)
+        if len(self.data)>= self.size:
+            deleted =  self.data.pop(0)
+            self.nb_impacts = self.nb_impacts - len(deleted) + len(new_data)
+        else:
+            self.nb_impacts = self.nb_impacts + len(new_data)
+            self.nb_samples+=1
+    
+class TargetDetector:
+    def __init__(self, hand_label, window_size = 100) -> None:
+        self.window_size = window_size
+        self.potential_targets = {}
+        self.hand_label = hand_label
+        pass
+    
+    def new_impacts(self, obj, impacts):
+        label = obj.label
+        if label in self.potential_targets:
+            self.potential_targets[label].update(impacts) 
+        else:
+            self.potential_targets[label] = Target(obj, impacts)
+
+    def get_most_probable_target(self):
+        if self.potential_targets:
+            n_impacts = {}
+            n_tot = 0
+            to_del_keys=[]
+            for lab, target in self.potential_targets.items():
+                n_impacts[lab] = target.projected_collison_window.nb_impacts
+                if n_impacts[lab]<=0:
+                    to_del_keys.append(lab)
+                n_tot +=n_impacts[lab]
+
+            for key in to_del_keys:
+                print('del key', key)
+                # del self.potential_targets[key]
+
+            if n_tot == 0:
+                most_probable_target =  None                
+            else:
+                for lab in self.potential_targets:
+                    self.potential_targets[lab].set_impact_ratio(n_impacts[lab]/n_tot)
+                max_ratio_label = max(n_impacts, key = n_impacts.get)
+                most_probable_target = self.potential_targets[max_ratio_label]
+        else:
+            most_probable_target =  None
+        
+        # print(self.hand_label,' most_probable_target : ',most_probable_target)
+        return most_probable_target, self.potential_targets
+
+class Target:
+    def __init__(self, obj, impacts, window_size = 10) -> None:
+        self.object = obj
+        self.label = obj.label
+        self.window_size = window_size
+        self.projected_collison_window = HandConeImpactsWindow(window_size)
+        self.update(impacts)
+        print('POTENTIAL TARGET ')
+        self.ratio=0
+        
+
+    def update(self, impacts):        
+        self.projected_collison_window.queue(impacts)
+    
+    def set_impact_ratio(self, ratio):
+        self.ratio = ratio
+
+    def __str__(self) -> str:
+        out = 'Target: '+self.object.label + ' - nb impacts: ' + str(self.projected_collison_window.nb_impacts) + ' - ratio: ' + str(self.ratio)
+        return out
+    def get_proba(self):
+        return self.ratio
+
+class GripSelector:
+    def __init__(self) -> None:
+        pass
