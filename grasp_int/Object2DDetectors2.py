@@ -34,6 +34,7 @@ class Object2DDetector:
         self.img_resolution = img_resolution
         os.system('nvidia-smi | grep python')
         self.detector = load_detector(object_detector_run_id)
+        #os.system("nvidia-smi | grep 'python' | awk '{ print $5 }' | xargs -n1 kill -9")
         os.system('nvidia-smi | grep python')
         # self.detector_windows = load_detector(object_detector_run_id) 
         # os.system('nvidia-smi | grep python')
@@ -45,7 +46,7 @@ class Object2DDetector:
 
 
         self.prediction_score_threshold = 0.8
-
+        self.detections = None
         self.it =0
 
 
@@ -129,6 +130,7 @@ class Object2DDetector:
             # exit()
         else:
             self.detections = None
+        # if type(self.detections) == list:
         if len(self.detections)<=0:
             self.detections=None
         return self.detections

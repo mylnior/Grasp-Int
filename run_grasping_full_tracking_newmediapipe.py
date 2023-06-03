@@ -68,7 +68,8 @@ class GraspingDetector:
                 img_flag = new_image_event.wait(1)
                 if img_flag:
                     hands = self.hand_detector.get_hands()
-                    if hands is not None and len(hands)>0:
+                    if hands is not None :
+                    # if hands is not None and len(hands)>0:
                         self.scene.update_hands(hands)
 
     def run(self):

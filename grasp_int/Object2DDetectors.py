@@ -44,13 +44,14 @@ class Object2DDetector:
         self.detector_kwargs = dict(one_instance_per_class=False, detection_th=detection_threshold)
 
         self.detections = None
+        self.new_detections = None
         self.prediction_score_threshold = 0.8
 
         self.it =0
 
 
     def forward_pass_full_detector(self):
-        self.detections = self.detector(self.image_full,**self.detector_kwargs)
+        self.new_detections = self.detector(self.image_full,**self.detector_kwargs)
 
     def forward_pass_windows_detector(self):
         self.detections_windows = self.detector_windows(self.image_full,**self.detector_kwargs)
@@ -127,8 +128,10 @@ class Object2DDetector:
             #     self.detections = None
             #     self.detecting =True
             # exit()
-            if len(self.detections)<=0:
+            if len(self.new_detections)<=0:
                 self.detections=None
+            else:
+                self.detections = self.new_detections
         else:
             self.detections = None
         return self.detections

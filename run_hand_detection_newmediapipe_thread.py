@@ -58,7 +58,7 @@ class GraspingDetector:
         success, img = self.hand_detector.next_frame()
         self.t_hand.start()
         while self.hand_detector.isOn():
-            print('new_image_event.is_set()',new_image_event.is_set())
+            # print('new_image_event.is_set()',new_image_event.is_set())
             success, img = self.hand_detector.next_frame()
             if not success:
                 self.img = None

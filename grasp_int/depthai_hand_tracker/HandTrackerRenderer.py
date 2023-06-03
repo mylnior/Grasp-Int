@@ -38,7 +38,7 @@ class HandTrackerRenderer:
             self.show_scores = False
 
         self.show_xyz_zone = self.show_xyz = self.tracker.xyz
-        self.show_xyz = False
+        self.show_xyz = True
         self.show_fps = True
         self.show_body = False # self.tracker.body_pre_focusing is not None
         self.show_inferences_status = False

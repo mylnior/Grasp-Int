@@ -256,19 +256,20 @@ class HybridOAKMediapipeDetector(dv.Device):
         self.fps = 40
         self.lensPos = 150
         self.expTime = 8000
-        self.expTime = 2000
-        self.sensIso = 500    
-        self.sensIso = 200    
+        self.expTime = 8000
+        self.sensIso = 800    
+        # self.sensIso = 200    
         self.wbManual = 4000
         self.rgb_res = dai.ColorCameraProperties.SensorResolution.THE_1080_P
         self.mono_res = dai.MonoCameraProperties.SensorResolution.THE_400_P
+        print(self.mono_res)
         self.left_right_initial_res = 720
         self.resolutions = [    np.array([1920, 1080]),    np.array([1280, 720]),    np.array([854, 480]),    np.array([640, 360]),    np.array([426, 240])]
         self.res_idx = 1
-        self.device.startPipeline(self.create_pipeline())
-
         self.crop = False
         self.resolution = self.resolutions[self.res_idx]
+        self.device.startPipeline(self.create_pipeline())
+
         if self.crop:
             self.croped_resolution = (self.resolution[1], self.resolution[1])
         else:
@@ -277,9 +278,8 @@ class HybridOAKMediapipeDetector(dv.Device):
         self.depthQ = self.device.getOutputQueue(name="depth", maxSize=1, blocking=False)
 
         # THE_720_P => 720
-        print()
         resolution_num = int(re.findall("\d+", str(self.mono_res))[0])
-        self.stereoInference = StereoInference(self.device, (400,400))
+        self.stereoInference = StereoInference(self.device, self.resolution)
 
         self.frame = None
         self.new_frame = False
@@ -289,8 +289,8 @@ class HybridOAKMediapipeDetector(dv.Device):
             base_options=BaseOptions(model_asset_path='/home/emoullet/Mediapipe2/hand_landmarker.task'),
             running_mode=VisionRunningMode.LIVE_STREAM,
             num_hands=2,
-            min_hand_detection_confidence = 0.6,
-            min_hand_presence_confidence = 0.6,
+            # min_hand_detection_confidence = 0.8,
+            # min_hand_presence_confidence = 0.8,
             result_callback=self.extract_hands)
         self.landmarker = HandLandmarker.create_from_options(options)
         self.format=mp.ImageFormat.SRGB
@@ -334,9 +334,8 @@ class HybridOAKMediapipeDetector(dv.Device):
         camRgb.setFps(self.fps)
 
         calibData = self.device.readCalibration()
-        self.matrix, cam_width, cam_height = calibData.getDefaultIntrinsics(dai.CameraBoardSocket.RGB)
+        self.matrix= np.array(calibData.getCameraIntrinsics(dai.CameraBoardSocket.RGB, self.resolution[0], self.resolution[1]))
         print(self.matrix)
-        self.matrix = np.array(self.matrix)
         
         camLeft = pipeline.create(dai.node.MonoCamera)
         camRight = pipeline.create(dai.node.MonoCamera)
@@ -405,10 +404,11 @@ class HybridOAKMediapipeDetector(dv.Device):
                 landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in hand_landmarks
                 ])
                 hand = Hand(handedness, hand_landmarks, hand_world_landmarks, hand_landmarks_proto, self.croped_resolution)
-                xyz, roi = self.stereoInference.calc_spatials(hand.landmarks,self.depth_map)
-                hand.set_xyz(xyz)
-                hand.roi = roi
-                hands.append(hand)
+                if hand.landmarks is not None:
+                    xyz, roi = self.stereoInference.calc_spatials(hand.landmarks,self.depth_map)
+                    hand.set_xyz(xyz)
+                    hand.roi = roi
+                    hands.append(hand)
             self.hands = hands
 
     def draw_landmarks_on_image(self, rgb_image): #TODO : MODIFY BY HAND
@@ -472,7 +472,9 @@ class HybridOAKMediapipeDetector(dv.Device):
     def get_hands(self):
         if self.frame is not None and self.new_frame:
         # if frame is not None and depthFrame is not None:
-            mp_frame = cv2.cvtColor(cv2.cvtColor(self.frame, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
+            # mp_frame = cv2.cvtColor(cv2.cvtColor(self.frame, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
+            mp_frame = cv2.cvtColor(self.frame, cv2.COLOR_BGR2RGB)
+            # mp_frame=self.frame
             frame_timestamp_ms = round(time.time()*1000)
             mp_image = mp.Image(image_format=self.format, data=mp_frame)
             self.landmarker.detect_async(mp_image, frame_timestamp_ms)
@@ -561,45 +563,29 @@ class StereoInference:
         # Original mono frames shape
         self.original_heigth = resolution[1]
         self.original_width = resolution[0]
-        self.original_width = 1080
+        print(self.original_width)
+        # self.original_width = 1080
         self.hfov = calibData.getFov(dai.CameraBoardSocket.RIGHT)
-        self.hfov = np.deg2rad(73.5)
+        print(self.hfov)
+        self.hfov = calibData.getFov(dai.CameraBoardSocket.RGB)
+        print(self.hfov)
+        self.hfov = np.deg2rad(self.hfov)
+        # print(self.hfov)
 
         focalLength = self.get_focal_length_pixels(self.original_width, self.hfov)
+        print('focalLength', focalLength)
         self.dispScaleFactor = baseline * focalLength
 
-        # Cropped frame shape
-        if resize :
-            self.mono_width = width
-            self.mono_heigth = heigth
-        else:
-            self.mono_width = self.original_width
-            self.mono_heigth = self.original_heigth
 
-        # Our coords are normalized for 300x300 image. 300x300 was downscaled from
-        # 720x720 (by ImageManip), so we need to multiple coords by 2.4 to get the correct disparity.
-        self.resize_factor = self.original_heigth / self.mono_heigth
+        M_right = np.array(calibData.getCameraIntrinsics(dai.CameraBoardSocket.RIGHT, 1280, 720))
+        print("RIGHT Camera resized intrinsics... 1280 x 720")
+        print(M_right)
+
         self.depth_thres_high = 3000
         self.depth_thres_low = 50
 
     def get_focal_length_pixels(self, pixel_width, hfov):
         return pixel_width * 0.5 / math.tan(hfov * 0.5 * math.pi/180)
-
-    def calculate_depth(self, disparity_pixels: float):
-        try:
-            return self.dispScaleFactor / disparity_pixels
-        except ZeroDivisionError:
-            return 0 # Or inf?
-
-    def calculate_distance(self, c1, c2):
-        # Our coords are normalized for 300x300 image. 300x300 was downscaled from 720x720 (by ImageManip),
-        # so we need to multiple coords by 2.4 (if using 720P resolution) to get the correct disparity.
-        c1 = np.array(c1) * self.resize_factor
-        c2 = np.array(c2) * self.resize_factor
-
-        x_delta = c1[0] - c2[0]
-        y_delta = c1[1] - c2[1]
-        return math.sqrt(x_delta ** 2 + y_delta ** 2)
 
     def calc_angle(self, offset):
             return math.atan(math.tan(self.hfov / 2.0) * offset / (self.original_width / 2.0))
@@ -611,8 +597,8 @@ class StereoInference:
         wrist = np_landmarks[0]
         thumb = np_landmarks[1]
         box_size = 10
-        print('depth_map.shape', depth_map.shape)
         #box_size = max(5, int(np.linalg.norm(wrist-thumb)))/2
+        # print('depth_map.shape',depth_map.shape)
         xmin = max(int(wrist[0]-box_size),0)
         xmax = min(int(wrist[0]+box_size), int(depth_map.shape[1]))
         ymin = max(int(wrist[1]-box_size),0 )
@@ -627,19 +613,19 @@ class StereoInference:
 
         # Calculate the average depth in the ROI.
         depthROI = depth_map[ymin:ymax, xmin:xmax]
+        # print('depthROI', depthROI)
         inThreshRange = (self.depth_thres_low < depthROI) & (depthROI < self.depth_thres_high)
-        if depthROI.any():
+        if depthROI[inThreshRange].any():
             averageDepth = averaging_method(depthROI[inThreshRange])
         else:
             averageDepth = 0
         #print(f"Average depth: {averageDepth}")
 
-
-        mid_w = int(depth_map.shape[0] / 2) # middle of the depth img
-        mid_h = int(depth_map.shape[1] / 2) # middle of the depth img
+        mid_w = int(depth_map.shape[1] / 2) # middle of the depth img
+        mid_h = int(depth_map.shape[0] / 2) # middle of the depth img
         bb_x_pos = wrist[0] - mid_w
         bb_y_pos = wrist[1] - mid_h
-
+        # print('wrist',wrist)
         angle_x = self.calc_angle(bb_x_pos)
         angle_y = self.calc_angle(bb_y_pos)
 
@@ -647,7 +633,7 @@ class StereoInference:
         x = z * math.tan(angle_x)
         y = -z * math.tan(angle_y)
 
-        #print(f"DEPTH MAP --- X: {x/10:3.0f}cm, Y: {y/10:3.0f} cm, Z: {z/10:3.0f} cm")
+        # print(f"DEPTH MAP --- X: {x/10:3.0f}cm, Y: {y/10:3.0f} cm, Z: {z/10:3.0f} cm")
         return np.array([x,y,z]), (xmin, ymin, xmax, ymax)
     
 def crop_to_rect(frame):
